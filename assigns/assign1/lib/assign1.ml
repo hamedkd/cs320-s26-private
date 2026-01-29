@@ -9,6 +9,9 @@ let sqrt (n : int) : int = (* CHANGE _n to n! *)
 (*-----------------------TEST-----------*)
 
 let pow (n : int) (k : int) : int = (* CHANGE _n to n and _k to k! *)
+  if k < 0 
+  then 0
+  else
   let rec loop acc k=
     if k=0 
     then acc
