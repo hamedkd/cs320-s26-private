@@ -6,19 +6,24 @@ let sqrt (n : int) : int = (* CHANGE _n to n! *)
     else loop(k+1)
   in loop 0
 
-(*-----------------------TEST-----------*)
+(*-----------------------TEST------------------------------*)
 
 let pow (n : int) (k : int) : int = (* CHANGE _n to n and _k to k! *)
-  if k < 0 
-  then 0
-  else
-  let rec loop acc k=
-    if k=0 
+  if k < 0
+    if n = 1 
+    then 1 
+    else if n = -1 
+      then if k mod 2 = 0 
+      then 1
+      else -1
+  else 0
+  else let rec loop acc k =
+    if k = 0 
     then acc
-    else loop(acc * n) (k - 1)
+    else loop (acc * n) (k - 1)
   in loop 1 k 
 
-(*-----------------------TEST-----------*)
+(*-----------------------TEST--------------------------------------*)
 
 
 let is_ws = function
