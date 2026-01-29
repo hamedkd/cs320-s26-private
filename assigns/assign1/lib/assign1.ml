@@ -9,8 +9,8 @@ let sqrt (n : int) : int = (* CHANGE _n to n! *)
 (*-----------------------TEST------------------------------*)
 
 let pow (n : int) (k : int) : int = (* CHANGE _n to n and _k to k! *)
-  if k < 0
-    if n = 1 
+  if k < 0 
+    then if n = 1 
     then 1 
     else if n = -1 
       then if k mod 2 = 0 
