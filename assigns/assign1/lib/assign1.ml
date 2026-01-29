@@ -32,7 +32,7 @@ let implode_all (css : char list list) : string list =
   in loop [] css
 
 let split_on_ws_helper (_cs : char list) : char list list =
-  assert false
+  assert true
 
 let split_on_ws (s : string) : string list =
   implode_all (split_on_ws_helper (explode s))
