@@ -57,6 +57,21 @@ let eval expr =
         in (res / r, g)
     | (res, d) -> (res, d)
 
+  and eval_num_paren expr =
+    match expr with
+    | n :: d when n <> "+" && n <> "-" && n <> "*" && n <> "/" && n <> "(" && n <> ")" ->
+        (int_of_string n, d)
+    | "(" :: d -> 
+        let rec fc depth acc = function 
+          | [] -> assert false
+          | ")" :: re when depth = 1 -> (List.rev acc, re)
+          | ")" :: d -> fc (depth - 1) (")" :: acc) d
+          | "(" :: d -> fc (depth + 1) ("(" :: acc) d
+          | token :: d -> fc depth (token :: acc) d
+        in let (ie, re) = fc 1 [] d 
+        in (eval ie, re)
+    | _ -> assert false
+  in eval expr   
   
 
 (*let eval _e = assert false *)
