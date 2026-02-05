@@ -35,7 +35,11 @@ let lex s =
         else assert false
   in go [] 0
 
-
+let rec drop_last l =
+  match l with
+  | x :: y :: rest -> x :: drop_last (y :: rest)
+  | _ -> []
+  
 let eval expr =
   let rec eval expr =
     let l = eval_mul_div expr in
@@ -72,9 +76,8 @@ let eval expr =
         in (eval ie, re)
     | _ -> assert false
   in eval expr   
-  
 
-(*let eval _e = assert false *)
+
 
 let interp (input : string) : int =
   match eval (lex input) with
