@@ -35,7 +35,31 @@ let lex s =
         else assert false
   in go [] 0
 
-let eval _e = assert false (* TODO *)
+
+let eval expr =
+  let rec eval expr =
+    let l = eval_mul_div expr in
+    match l with
+    | (res, []) -> res
+    | (res, "+" :: d) -> let r = eval d in
+        res + r
+    | (res, "-" :: d) -> let r = eval d in
+        res - r
+    | _ -> assert false
+
+  and eval_mul_div expr =
+    let l = eval_num_paren expr in
+    match l with
+    | (res, []) -> (res, [])
+    | (res, "*" :: d) -> let (r, g) = eval_mul_div d 
+        in (res * r, g)
+    | (res, "/" :: d) -> let (r, g) = eval_mul_div d 
+        in (res / r, g)
+    | (res, d) -> (res, d)
+
+  
+
+(*let eval _e = assert false *)
 
 let interp (input : string) : int =
   match eval (lex input) with
