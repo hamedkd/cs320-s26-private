@@ -39,43 +39,56 @@ let rec drop_last l =
   match l with
   | x :: y :: rest -> x :: drop_last (y :: rest)
   | _ -> []
-  
+
 let eval expr =
-  let rec eval expr =
-    let l = eval_mul_div expr in
-    match l with
-    | (res, []) -> res
-    | (res, "+" :: d) -> let r = eval d in
-        res + r
-    | (res, "-" :: d) -> let r = eval d in
-        res - r
-    | _ -> assert false
-
+  let split_at i l =
+    let rec loop n acc l =
+      if n = 0 
+      then match l with
+           | _ :: t -> (List.rev acc, t)
+           | [] -> assert false
+      else match l with
+      | h :: t -> loop (n - 1) (h :: acc) t
+      | [] -> assert false
+    in loop i [] l
+  in
+  let help2 ops expr =
+    let rec loop i depth f = function
+      | [] -> f
+      | h :: t ->
+        if h = "(" then loop (i + 1) (depth + 1) f t
+        else if h = ")" 
+        then loop (i+1) (depth - 1) f t
+        else if depth = 0 && List.mem h ops 
+        then
+          loop (i+1) depth (Some (i, h)) t
+        else
+          loop (i+1) depth f t
+    in
+    loop 0 0 None expr
+  in
+  let rec eval_expr expr =
+    match help2 ["+"; "-"] expr with
+    | Some (i, op) ->
+        let (l, r) = split_at i expr in
+        if op = "+" 
+        then eval_expr l + eval_expr r
+        else eval_expr l - eval_expr r
+    | None -> eval_mul_div expr
   and eval_mul_div expr =
-    let l = eval_num_paren expr in
-    match l with
-    | (res, []) -> (res, [])
-    | (res, "*" :: d) -> let (r, g) = eval_mul_div d 
-        in (res * r, g)
-    | (res, "/" :: d) -> let (r, g) = eval_mul_div d 
-        in (res / r, g)
-    | (res, d) -> (res, d)
-
+    match help2 ["*"; "/"] expr with
+    | Some (i, op) ->
+        let (lhs, rhs) = split_at i expr in
+        if op = "*" 
+        then eval_mul_div lhs * eval_mul_div rhs
+        else eval_mul_div lhs / eval_mul_div rhs
+    | None -> eval_num_paren expr
   and eval_num_paren expr =
     match expr with
-    | n :: d when n <> "+" && n <> "-" && n <> "*" && n <> "/" && n <> "(" && n <> ")" ->
-        (int_of_string n, d)
-    | "(" :: d -> 
-        let rec fc depth acc = function 
-          | [] -> assert false
-          | ")" :: re when depth = 1 -> (List.rev acc, re)
-          | ")" :: d -> fc (depth - 1) (")" :: acc) d
-          | "(" :: d -> fc (depth + 1) ("(" :: acc) d
-          | token :: d -> fc depth (token :: acc) d
-        in let (ie, re) = fc 1 [] d 
-        in (eval ie, re)
-    | _ -> assert false
-  in eval expr   
+    | [n] -> int_of_string n               (* number *)
+    | "(" :: rest -> eval_expr (drop_last rest) (* parened expr *)
+    | _ -> assert false                    (* undefined *)
+  in eval_expr expr
 
 
 
