@@ -216,7 +216,145 @@ exception Assert_fail of pos
 exception Match_fail of pos
 
 let eval_expr (env : dyn_env) (e : expr) : value =
-  ignore (env, e); assert false
+  let rec apply caller_env f_val arg_expr =
+    let arg_val = go caller_env arg_expr in
+    match f_val with
+    | VClos { env = clos_env; name; args; body } ->
+      (match args with
+       | [] -> failwith "apply: closure has no parameters"
+       | [x] ->
+         (* Final argument: extend closure env and evaluate body *)
+         let env' = Env.add x arg_val clos_env in
+         (* Re-bind self for recursive closures *)
+         let env' = match name with
+           | None   -> env'
+           | Some f -> Env.add f f_val env'
+         in
+         go env' body
+       | x :: rest ->
+         (* Partial application: return a new closure *)
+         let env' = Env.add x arg_val clos_env in
+         let env' = match name with
+           | None   -> env'
+           | Some f -> Env.add f f_val env'
+         in
+         VClos { env = env'; name; args = rest; body })
+    | _ -> failwith "apply: not a closure"
+ 
+  and go env e =
+    match e.expr with
+    | Unit    -> VUnit
+    | Bool b  -> VBool b
+    | Int n   -> VInt n
+    | Nil     -> VInt_list []
+ 
+    | Var x ->
+      (match Env.find_opt x env with
+       | Some v -> v
+       | None   -> failwith ("Unbound variable: " ^ x))
+ 
+    | Assert e1 ->
+      (match go env e1 with
+       | VBool true -> VUnit
+       | _          -> raise (Assert_fail e.pos))
+ 
+    | Negate e1 ->
+      (match go env e1 with
+       | VInt n -> VInt (-n)
+       | _      -> failwith "Negate: expected int")
+ 
+    | Bop (bop, e1, e2) -> eval_bop env e bop e1 e2
+ 
+    | If (e1, e2, e3) ->
+      (match go env e1 with
+       | VBool true  -> go env e2
+       | VBool false -> go env e3
+       | _           -> failwith "If: expected bool")
+ 
+    | Tuple es -> VTuple (List.map (go env) es)
+ 
+    | Fun (args, body) ->
+      (* Multi-arg fun becomes a curried closure carrying the full arg list *)
+      VClos { env; name = None; args = List.map fst args; body }
+ 
+    | App (f_expr, arg_exprs) ->
+      let f_val = go env f_expr in
+      List.fold_left (apply env) f_val arg_exprs
+ 
+    | Let { is_rec; name; args; annot=_; binding; body } ->
+      let v =
+        if is_rec then
+          (* let rec f (x1:t1)...(xk:tk) : t = binding
+             Store a named closure so recursive calls find f in its own env. *)
+          VClos { env; name = Some name; args = List.map fst args; body = binding }
+        else
+          match args with
+          | [] -> go env binding
+          | _  ->
+            (* let f (x1:t1)...(xk:tk) = binding  =>  fun x1 ... xk -> binding *)
+            VClos { env; name = None; args = List.map fst args; body = binding }
+      in
+      go (Env.add name v env) body
+ 
+    | Match _ ->
+      (* Not required for check-in *)
+      assert false
+ 
+  and eval_bop env e bop e1 e2 =
+    match bop with
+    | Add ->
+      (match go env e1, go env e2 with
+       | VInt a, VInt b -> VInt (a + b) | _ -> failwith "Add")
+    | Sub ->
+      (match go env e1, go env e2 with
+       | VInt a, VInt b -> VInt (a - b) | _ -> failwith "Sub")
+    | Mul ->
+      (match go env e1, go env e2 with
+       | VInt a, VInt b -> VInt (a * b) | _ -> failwith "Mul")
+    | Div ->
+      (* Per spec: evaluate e2 first; raise Div_by_zero if 0 *)
+      (match go env e2 with
+       | VInt 0 -> raise (Div_by_zero e.pos)
+       | VInt b -> (match go env e1 with VInt a -> VInt (a / b) | _ -> failwith "Div")
+       | _ -> failwith "Div")
+    | Mod ->
+      (match go env e2 with
+       | VInt 0 -> raise (Div_by_zero e.pos)
+       | VInt b -> (match go env e1 with VInt a -> VInt (a mod b) | _ -> failwith "Mod")
+       | _ -> failwith "Mod")
+    | Eq  ->
+      VBool (go env e1 = go env e2)
+    | Neq ->
+      VBool (go env e1 <> go env e2)
+    | Lt  ->
+      (match go env e1, go env e2 with
+       | VInt a, VInt b -> VBool (a < b)  | _ -> failwith "Lt")
+    | Lte ->
+      (match go env e1, go env e2 with
+       | VInt a, VInt b -> VBool (a <= b) | _ -> failwith "Lte")
+    | Gt  ->
+      (match go env e1, go env e2 with
+       | VInt a, VInt b -> VBool (a > b)  | _ -> failwith "Gt")
+    | Gte ->
+      (match go env e1, go env e2 with
+       | VInt a, VInt b -> VBool (a >= b) | _ -> failwith "Gte")
+    | And ->
+      (* Short-circuit: only evaluate e2 if e1 is true *)
+      (match go env e1 with
+       | VBool false -> VBool false
+       | VBool true  -> go env e2
+       | _ -> failwith "And")
+    | Or ->
+      (match go env e1 with
+       | VBool true  -> VBool true
+       | VBool false -> go env e2
+       | _ -> failwith "Or")
+    | Cons ->
+      (match go env e1, go env e2 with
+       | VInt n, VInt_list ns -> VInt_list (n :: ns)
+       | _ -> failwith "Cons")
+  in
+  go env e
 
 let eval (p : prog) : value =
   let rec go env v p =
