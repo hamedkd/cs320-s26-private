@@ -168,7 +168,148 @@ type ctxt = ty Env.t
 (* Type Checking *)
 
 let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
-  ignore (ctxt, e); assert false
+  let ( let* ) = Result.bind in
+  
+  let rec infer ctxt e =
+    match e.expr with
+    | Unit -> Ok TUnit
+    | Bool _ -> Ok TBool
+    | Int _ -> Ok TInt
+    | Nil -> Ok TInt_list
+ 
+    | Var x ->
+      (match Env.find_opt x ctxt with
+       | Some ty -> Ok ty
+       | None -> Error (unknown_var e.pos x))
+ 
+    | Assert e1 ->
+      let* _ = check ctxt e1 TBool in
+      Ok TUnit
+ 
+    | Negate e1 ->
+      let* _ = check ctxt e1 TInt in
+      Ok TInt
+ 
+    | Bop (bop, e1, e2) ->
+      (match bop with
+       | Add | Sub | Mul | Div | Mod ->
+         let* _ = check ctxt e1 TInt in
+         let* _ = check ctxt e2 TInt in
+         Ok TInt
+       | Lt | Lte | Gt | Gte ->
+         let* _ = check ctxt e1 TInt in
+         let* _ = check ctxt e2 TInt in
+         Ok TBool
+       | And | Or ->
+         let* _ = check ctxt e1 TBool in
+         let* _ = check ctxt e2 TBool in
+         Ok TBool
+       | Eq | Neq ->
+         (* Both sides must have the same type; infer from left *)
+         let* t1 = infer ctxt e1 in
+         let* _  = check ctxt e2 t1 in
+         Ok TBool
+       | Cons ->
+         let* _ = check ctxt e1 TInt in
+         let* _ = check ctxt e2 TInt_list in
+         Ok TInt_list)
+ 
+    | If (e1, e2, e3) ->
+      let* _  = check ctxt e1 TBool in
+      let* t2 = infer ctxt e2 in
+      let* _  = check ctxt e3 t2 in
+      Ok t2
+ 
+    | Tuple es ->
+      let* ts =
+        List.fold_left
+          (fun acc ei ->
+            let* ts = acc in
+            let* t  = infer ctxt ei in
+            Ok (ts @ [t]))
+          (Ok []) es
+      in
+      Ok (TTuple ts)
+ 
+    | Fun (args, body) ->
+      (* Add all typed args to context *)
+      let ctxt' = List.fold_left (fun c (x, t) -> Env.add x t c) ctxt args in
+      let* ret  = infer ctxt' body in
+      (* Build curried type: t1 -> t2 -> ... -> ret *)
+      Ok (List.fold_right (fun (_, t) acc -> TFun (t, acc)) args ret)
+ 
+    | App (f_expr, arg_exprs) ->
+      let* f_ty = infer ctxt f_expr in
+      (* Peel off one TFun per argument *)
+      let* result_ty =
+        List.fold_left
+          (fun acc_ty arg_expr ->
+            let* ty = acc_ty in
+            match ty with
+            | TFun (param_ty, ret_ty) ->
+              let* _ = check ctxt arg_expr param_ty in
+              Ok ret_ty
+            | _ ->
+              Error (not_func f_expr.pos ty))
+          (Ok f_ty) arg_exprs
+      in
+      Ok result_ty
+ 
+    | Let { is_rec=false; name; args=[]; annot; binding; body } ->
+      (* let name [: annot] = binding in body *)
+      let* bind_ty =
+        match annot with
+        | None     -> infer ctxt binding
+        | Some ann ->
+          let* _ = check ctxt binding ann in
+          Ok ann
+      in
+      infer (Env.add name bind_ty ctxt) body
+ 
+    | Let { is_rec=false; name; args; annot; binding; body } ->
+      (* let name (x1:t1)...(xk:tk) [: annot] = binding in body *)
+      let ctxt' = List.fold_left (fun c (x, t) -> Env.add x t c) ctxt args in
+      let* ret_ty =
+        match annot with
+        | None     -> infer ctxt' binding
+        | Some ann ->
+          let* _ = check ctxt' binding ann in
+          Ok ann
+      in
+      let fun_ty  = List.fold_right (fun (_, t) acc -> TFun (t, acc)) args ret_ty in
+      infer (Env.add name fun_ty ctxt) body
+ 
+    | Let { is_rec=true; name=_; args=[]; annot=_; binding=_; body=_ } ->
+      (* Recursive with no args is an error after type-checking *)
+      Error (missing_rec_arg e.pos)
+ 
+    | Let { is_rec=true; name; args; annot=None; binding=_; body=_ } ->
+      ignore (name, args);
+      Error (missing_rec_annot e.pos)
+ 
+    | Let { is_rec=true; name; args; annot=Some ret_ty; binding; body } ->
+      (* let rec f (x1:t1)...(xk:tk) : ret_ty = binding in body *)
+      let fun_ty   = List.fold_right (fun (_, t) acc -> TFun (t, acc)) args ret_ty in
+      (* Binding context: f + all args *)
+      let ctxt_bind =
+        List.fold_left (fun c (x, t) -> Env.add x t c) ctxt args
+        |> Env.add name fun_ty
+      in
+      let* _ = check ctxt_bind binding ret_ty in
+      infer (Env.add name fun_ty ctxt) body
+ 
+    | Match _ ->
+      (* Not required for check-in *)
+      assert false
+ 
+  (* Check that e has exactly [expected] type *)
+  and check ctxt e expected =
+    let* actual = infer ctxt e in
+    if actual = expected then Ok actual
+    else Error (exp_ty e.pos actual expected)
+  in
+  ignore (exp_pat, exp_tuple_pat, exp_diff_tuple_pat, too_many_args, bound_several_times);
+  infer ctxt e
 
 let type_of (p : prog) : (ty, Error_msg.t) result =
   let rec go ctxt ty p =
