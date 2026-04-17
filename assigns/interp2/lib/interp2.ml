@@ -169,27 +169,108 @@ type ctxt = ty Env.t
 
 let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
   let ( let* ) = Result.bind in
-  
+
+  (* Pattern typing: "p : ty => Gamma"
+     Returns either Ok context-of-bindings or Error.
+     Also checks that the pattern is compatible with [expected_ty]. *)
+  let rec type_pat (p : pattern) (expected_ty : ty)
+      : (ty Env.t, Error_msg.t) result =
+    match p.pattern with
+    | PUnit ->
+      if expected_ty = TUnit then Ok Env.empty
+      else Error (exp_pat p.pos TUnit expected_ty)
+
+    | PBool _ ->
+      if expected_ty = TBool then Ok Env.empty
+      else Error (exp_pat p.pos TBool expected_ty)
+
+    | PInt _ ->
+      if expected_ty = TInt then Ok Env.empty
+      else Error (exp_pat p.pos TInt expected_ty)
+
+    | PNil ->
+      if expected_ty = TInt_list then Ok Env.empty
+      else Error (exp_pat p.pos TInt_list expected_ty)
+
+    | PVar x ->
+      (* Variable pattern matches any type; introduces x : expected_ty *)
+      Ok (Env.singleton x expected_ty)
+
+    | PCons (p1, p2) ->
+      if expected_ty <> TInt_list then
+        Error (exp_pat p.pos TInt_list expected_ty)
+      else
+        let* gamma1 = type_pat p1 TInt in
+        let* gamma2 = type_pat p2 TInt_list in
+        (* Check disjointness *)
+        let* () =
+          Env.fold
+            (fun x _ acc ->
+              let* () = acc in
+              if Env.mem x gamma2 then
+                Error (bound_several_times p.pos x)
+              else Ok ())
+            gamma1 (Ok ())
+        in
+        Ok (Env.union (fun _x v _v2 -> Some v) gamma1 gamma2)
+
+    | PTuple ps ->
+      (match expected_ty with
+       | TTuple ts ->
+         if List.length ps <> List.length ts then
+           Error (exp_diff_tuple_pat p.pos expected_ty)
+         else
+           let* gammas =
+             List.fold_left2
+               (fun acc pi ti ->
+                 let* gs = acc in
+                 let* g = type_pat pi ti in
+                 Ok (gs @ [g]))
+               (Ok []) ps ts
+           in
+           (* Check all pairwise disjoint, then merge *)
+           let* merged =
+             List.fold_left
+               (fun acc_res g ->
+                 let* acc = acc_res in
+                 (* Check each key in g not already in acc *)
+                 let* () =
+                   Env.fold
+                     (fun x _ inner_acc ->
+                       let* () = inner_acc in
+                       if Env.mem x acc then
+                         Error (bound_several_times p.pos x)
+                       else Ok ())
+                     g (Ok ())
+                 in
+                 Ok (Env.union (fun _x v _v2 -> Some v) acc g))
+               (Ok Env.empty) gammas
+           in
+           Ok merged
+       | _ ->
+         Error (exp_tuple_pat p.pos expected_ty))
+  in
+
   let rec infer ctxt e =
     match e.expr with
     | Unit -> Ok TUnit
     | Bool _ -> Ok TBool
     | Int _ -> Ok TInt
     | Nil -> Ok TInt_list
- 
+
     | Var x ->
       (match Env.find_opt x ctxt with
        | Some ty -> Ok ty
        | None -> Error (unknown_var e.pos x))
- 
+
     | Assert e1 ->
       let* _ = check ctxt e1 TBool in
       Ok TUnit
- 
+
     | Negate e1 ->
       let* _ = check ctxt e1 TInt in
       Ok TInt
- 
+
     | Bop (bop, e1, e2) ->
       (match bop with
        | Add | Sub | Mul | Div | Mod ->
@@ -205,7 +286,6 @@ let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
          let* _ = check ctxt e2 TBool in
          Ok TBool
        | Eq | Neq ->
-         (* Both sides must have the same type; infer from left *)
          let* t1 = infer ctxt e1 in
          let* _  = check ctxt e2 t1 in
          Ok TBool
@@ -213,13 +293,13 @@ let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
          let* _ = check ctxt e1 TInt in
          let* _ = check ctxt e2 TInt_list in
          Ok TInt_list)
- 
+
     | If (e1, e2, e3) ->
       let* _  = check ctxt e1 TBool in
       let* t2 = infer ctxt e2 in
       let* _  = check ctxt e3 t2 in
       Ok t2
- 
+
     | Tuple es ->
       let* ts =
         List.fold_left
@@ -230,17 +310,14 @@ let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
           (Ok []) es
       in
       Ok (TTuple ts)
- 
+
     | Fun (args, body) ->
-      (* Add all typed args to context *)
       let ctxt' = List.fold_left (fun c (x, t) -> Env.add x t c) ctxt args in
       let* ret  = infer ctxt' body in
-      (* Build curried type: t1 -> t2 -> ... -> ret *)
       Ok (List.fold_right (fun (_, t) acc -> TFun (t, acc)) args ret)
- 
+
     | App (f_expr, arg_exprs) ->
       let* f_ty = infer ctxt f_expr in
-      (* Peel off one TFun per argument *)
       let* result_ty =
         List.fold_left
           (fun acc_ty arg_expr ->
@@ -254,9 +331,8 @@ let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
           (Ok f_ty) arg_exprs
       in
       Ok result_ty
- 
+
     | Let { is_rec=false; name; args=[]; annot; binding; body } ->
-      (* let name [: annot] = binding in body *)
       let* bind_ty =
         match annot with
         | None     -> infer ctxt binding
@@ -265,9 +341,8 @@ let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
           Ok ann
       in
       infer (Env.add name bind_ty ctxt) body
- 
+
     | Let { is_rec=false; name; args; annot; binding; body } ->
-      (* let name (x1:t1)...(xk:tk) [: annot] = binding in body *)
       let ctxt' = List.fold_left (fun c (x, t) -> Env.add x t c) ctxt args in
       let* ret_ty =
         match annot with
@@ -278,37 +353,54 @@ let type_of_expr (ctxt : ctxt) (e : expr) : (ty, Error_msg.t) result =
       in
       let fun_ty  = List.fold_right (fun (_, t) acc -> TFun (t, acc)) args ret_ty in
       infer (Env.add name fun_ty ctxt) body
- 
+
     | Let { is_rec=true; name=_; args=[]; annot=_; binding=_; body=_ } ->
-      (* Recursive with no args is an error after type-checking *)
       Error (missing_rec_arg e.pos)
- 
-    | Let { is_rec=true; name; args; annot=None; binding=_; body=_ } ->
-      ignore (name, args);
+
+    | Let { is_rec=true; name=_; args=_; annot=None; binding=_; body=_ } ->
       Error (missing_rec_annot e.pos)
- 
+
     | Let { is_rec=true; name; args; annot=Some ret_ty; binding; body } ->
-      (* let rec f (x1:t1)...(xk:tk) : ret_ty = binding in body *)
       let fun_ty   = List.fold_right (fun (_, t) acc -> TFun (t, acc)) args ret_ty in
-      (* Binding context: f + all args *)
       let ctxt_bind =
         List.fold_left (fun c (x, t) -> Env.add x t c) ctxt args
         |> Env.add name fun_ty
       in
       let* _ = check ctxt_bind binding ret_ty in
       infer (Env.add name fun_ty ctxt) body
- 
-    | Match _ ->
-      (* Not required for check-in *)
-      assert false
- 
-  (* Check that e has exactly [expected] type *)
+
+    | Match (e0, cases) ->
+      (* Infer type of scrutinee *)
+      let* t0 = infer ctxt e0 in
+      (* Must have at least one case; infer type from first case *)
+      (match cases with
+       | [] ->
+         (* Empty match — treat as unit, will fail at runtime *)
+         Ok TUnit
+       | (p1, e1) :: rest ->
+         (* Type the first pattern against t0 to get the branch type *)
+         let* gamma1 = type_pat p1 t0 in
+         let ctxt1   = Env.union (fun _x _v1 v2 -> Some v2) ctxt gamma1 in
+         let* t_branch = infer ctxt1 e1 in
+         (* All other branches must also type-check at t_branch *)
+         let* () =
+           List.fold_left
+             (fun acc (pi, ei) ->
+               let* () = acc in
+               let* gammai = type_pat pi t0 in
+               let ctxti = Env.union (fun _x _v1 v2 -> Some v2) ctxt gammai in
+               let* _ = check ctxti ei t_branch in
+               Ok ())
+             (Ok ()) rest
+         in
+         Ok t_branch)
+
   and check ctxt e expected =
     let* actual = infer ctxt e in
     if actual = expected then Ok actual
     else Error (exp_ty e.pos actual expected)
   in
-  ignore (exp_pat, exp_tuple_pat, exp_diff_tuple_pat, too_many_args, bound_several_times);
+  ignore (too_many_args);
   infer ctxt e
 
 let type_of (p : prog) : (ty, Error_msg.t) result =
@@ -356,6 +448,33 @@ exception Div_by_zero of pos
 exception Assert_fail of pos
 exception Match_fail of pos
 
+(* Pattern matching: attempt to match value [v] against pattern [p].
+   Returns Some env_of_bindings on success, None on failure. *)
+let rec match_pat (v : value) (p : pattern) : (value Env.t) option =
+  match p.pattern, v with
+  | PUnit, VUnit -> Some Env.empty
+  | PBool b, VBool b' when b = b' -> Some Env.empty
+  | PInt n, VInt n' when n = n' -> Some Env.empty
+  | PNil, VInt_list [] -> Some Env.empty
+  | PVar x, _ -> Some (Env.singleton x v)
+
+  | PCons (p1, p2), VInt_list (n :: ns) ->
+    (match match_pat (VInt n) p1, match_pat (VInt_list ns) p2 with
+     | Some e1, Some e2 ->
+       Some (Env.union (fun _x v1 _v2 -> Some v1) e1 e2)
+     | _ -> None)
+
+  | PTuple ps, VTuple vs when List.length ps = List.length vs ->
+    let results = List.map2 match_pat vs ps in
+    if List.for_all Option.is_some results then
+      let envs = List.filter_map Fun.id results in
+      Some (List.fold_left
+              (fun acc e -> Env.union (fun _x v1 _v2 -> Some v1) acc e)
+              Env.empty envs)
+    else None
+
+  | _ -> None
+
 let eval_expr (env : dyn_env) (e : expr) : value =
   let rec apply caller_env f_val arg_expr =
     let arg_val = go caller_env arg_expr in
@@ -364,16 +483,13 @@ let eval_expr (env : dyn_env) (e : expr) : value =
       (match args with
        | [] -> failwith "apply: closure has no parameters"
        | [x] ->
-         (* Final argument: extend closure env and evaluate body *)
          let env' = Env.add x arg_val clos_env in
-         (* Re-bind self for recursive closures *)
          let env' = match name with
            | None   -> env'
            | Some f -> Env.add f f_val env'
          in
          go env' body
        | x :: rest ->
-         (* Partial application: return a new closure *)
          let env' = Env.add x arg_val clos_env in
          let env' = match name with
            | None   -> env'
@@ -381,66 +497,73 @@ let eval_expr (env : dyn_env) (e : expr) : value =
          in
          VClos { env = env'; name; args = rest; body })
     | _ -> failwith "apply: not a closure"
- 
+
   and go env e =
     match e.expr with
     | Unit    -> VUnit
     | Bool b  -> VBool b
     | Int n   -> VInt n
     | Nil     -> VInt_list []
- 
+
     | Var x ->
       (match Env.find_opt x env with
        | Some v -> v
        | None   -> failwith ("Unbound variable: " ^ x))
- 
+
     | Assert e1 ->
       (match go env e1 with
        | VBool true -> VUnit
        | _          -> raise (Assert_fail e.pos))
- 
+
     | Negate e1 ->
       (match go env e1 with
        | VInt n -> VInt (-n)
        | _      -> failwith "Negate: expected int")
- 
+
     | Bop (bop, e1, e2) -> eval_bop env e bop e1 e2
- 
+
     | If (e1, e2, e3) ->
       (match go env e1 with
        | VBool true  -> go env e2
        | VBool false -> go env e3
        | _           -> failwith "If: expected bool")
- 
+
     | Tuple es -> VTuple (List.map (go env) es)
- 
+
     | Fun (args, body) ->
-      (* Multi-arg fun becomes a curried closure carrying the full arg list *)
       VClos { env; name = None; args = List.map fst args; body }
- 
+
     | App (f_expr, arg_exprs) ->
       let f_val = go env f_expr in
       List.fold_left (apply env) f_val arg_exprs
- 
+
     | Let { is_rec; name; args; annot=_; binding; body } ->
       let v =
         if is_rec then
-          (* let rec f (x1:t1)...(xk:tk) : t = binding
-             Store a named closure so recursive calls find f in its own env. *)
           VClos { env; name = Some name; args = List.map fst args; body = binding }
         else
           match args with
           | [] -> go env binding
           | _  ->
-            (* let f (x1:t1)...(xk:tk) = binding  =>  fun x1 ... xk -> binding *)
             VClos { env; name = None; args = List.map fst args; body = binding }
       in
       go (Env.add name v env) body
- 
-    | Match _ ->
-      (* Not required for check-in *)
-      assert false
- 
+
+    | Match (e0, cases) ->
+      let v0 = go env e0 in
+      (* Try each case in order *)
+      let rec try_cases = function
+        | [] -> raise (Match_fail e.pos)
+        | (pi, ei) :: rest ->
+          (match match_pat v0 pi with
+           | None -> try_cases rest
+           | Some bindings ->
+             (* merge: env is base, bindings shadow it *)
+             let env' = Env.union (fun _x _base bnd -> Some bnd) env bindings in
+             go env' ei)
+      in
+      try_cases cases
+
   and eval_bop env e bop e1 e2 =
     match bop with
     | Add ->
@@ -453,7 +576,6 @@ let eval_expr (env : dyn_env) (e : expr) : value =
       (match go env e1, go env e2 with
        | VInt a, VInt b -> VInt (a * b) | _ -> failwith "Mul")
     | Div ->
-      (* Per spec: evaluate e2 first; raise Div_by_zero if 0 *)
       (match go env e2 with
        | VInt 0 -> raise (Div_by_zero e.pos)
        | VInt b -> (match go env e1 with VInt a -> VInt (a / b) | _ -> failwith "Div")
@@ -480,7 +602,6 @@ let eval_expr (env : dyn_env) (e : expr) : value =
       (match go env e1, go env e2 with
        | VInt a, VInt b -> VBool (a >= b) | _ -> failwith "Gte")
     | And ->
-      (* Short-circuit: only evaluate e2 if e1 is true *)
       (match go env e1 with
        | VBool false -> VBool false
        | VBool true  -> go env e2
