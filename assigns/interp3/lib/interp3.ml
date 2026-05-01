@@ -507,27 +507,6 @@ let rec match_pattern (v : value) (p : pattern) : value Env.t option =
     match_pattern v' sub_pat
   | _ -> None
 
-let rec compare_values pos v1 v2 =
-  match v1, v2 with
-  | VUnit, VUnit -> 0
-  | VBool b1, VBool b2 -> compare b1 b2
-  | VInt n1, VInt n2 -> compare n1 n2
-  | VString s1, VString s2 -> compare s1 s2
-  | VTuple vs1, VTuple vs2 ->
-    let rec cmp_list l1 l2 =
-      match l1, l2 with
-      | [], [] -> 0
-      | x :: xs, y :: ys ->
-        let c = compare_values pos x y in
-        if c <> 0 then c else cmp_list xs ys
-      | _ -> 0
-    in cmp_list vs1 vs2
-  | VCons (n1, None), VCons (n2, None) -> compare n1 n2
-  | VCons (n1, Some v1'), VCons (n2, Some v2') ->
-    let c = compare n1 n2 in
-    if c <> 0 then c else compare_values pos v1' v2'
-  | VClos _, _ | _, VClos _ -> raise (Compare_fun_val pos)
-  | _ -> 0
 
 let eval_expr (env : dyn_env) (e : Ast.Expr.t) : value =
   let rec eval (env : dyn_env) (e : expr) : value =
@@ -574,12 +553,12 @@ let eval_expr (env : dyn_env) (e : Ast.Expr.t) : value =
           | Sub, VInt n1, VInt n2 -> VInt (n1 - n2)
           | Mul, VInt n1, VInt n2 -> VInt (n1 * n2)
           | Concat, VString s1, VString s2 -> VString (s1 ^ s2)
-          | Eq, _, _ -> VBool (compare_values e.pos v1 v2 = 0)
-          | Neq, _, _ -> VBool (compare_values e.pos v1 v2 <> 0)
-          | Lt, _, _ -> VBool (compare_values e.pos v1 v2 < 0)
-          | Lte, _, _ -> VBool (compare_values e.pos v1 v2 <= 0)
-          | Gt, _, _ -> VBool (compare_values e.pos v1 v2 > 0)
-          | Gte, _, _ -> VBool (compare_values e.pos v1 v2 >= 0)
+          | Eq, _, _ -> VBool (compare v1 v2 = 0)
+          | Neq, _, _ -> VBool (compare v1 v2 <> 0)
+          | Lt, _, _ -> VBool (compare v1 v2 < 0)
+          | Lte, _, _ -> VBool (compare v1 v2 <= 0)
+          | Gt, _, _ -> VBool (compare v1 v2 > 0)
+          | Gte, _, _ -> VBool (compare v1 v2 >= 0)
           | _ -> assert false))
     | If (e1, e2, e3) ->
       (match eval env e1 with
