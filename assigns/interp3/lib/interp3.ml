@@ -555,8 +555,6 @@ let eval_expr (env : dyn_env) (e : Ast.Expr.t) : value =
           | Concat, VString s1, VString s2 -> VString (s1 ^ s2)
           | Eq, _, _ -> VBool (compare v1 v2 = 0)
           | Neq, _, _ -> VBool (compare v1 v2 <> 0)
-          | Lt, _, _ -> VBool (compare v1 v2 < 0)
-          | Gt, _, _ -> VBool (compare v1 v2 > 0)
           | _ -> assert false))
     | If (e1, e2, e3) ->
       (match eval env e1 with
