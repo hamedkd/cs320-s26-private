@@ -551,7 +551,9 @@ let eval_expr (env : dyn_env) (e : Ast.Expr.t) : value =
          (match op, v1, v2 with
           | Add, VInt n1, VInt n2 -> VInt (n1 + n2)
           | Sub, VInt n1, VInt n2 -> VInt (n1 - n2)
-          | Mul, VInt n1, VInt n2 -> VInt (n1 * n2)))
+          | Mul, VInt n1, VInt n2 -> VInt (n1 * n2)
+          | Concat, VString s1, VString s2 -> VString (s1 ^ s2)
+          | _ -> assert false))
     | If (e1, e2, e3) ->
       (match eval env e1 with
        | VBool true -> eval env e2
